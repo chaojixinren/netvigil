@@ -1,7 +1,10 @@
 package util
 
 import (
+	"fmt"
 	"log"
+	"math"
+	"sync"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
@@ -9,7 +12,17 @@ import (
 	ort "github.com/yalue/onnxruntime_go"
 )
 
-var ortInitialized = false
+var (
+	ortInitialized = false
+
+	// AI 推理会话与输入/输出张量只初始化一次，全局复用，
+	// 避免每个数据包都重新读取模型文件、重建 session。
+	aiSession      *ort.AdvancedSession
+	aiInputTensor  *ort.Tensor[float32]
+	aiOutputTensor *ort.Tensor[float32]
+	aiReady        bool
+	aiMu           sync.Mutex
+)
 
 func init() {
 	libPath := viper.GetString("ortlib_path")
@@ -17,8 +30,7 @@ func init() {
 	if libPath != "" {
 		log.Printf("Using ONNX Runtime shared library: %s", libPath)
 		ort.SetSharedLibraryPath(libPath)
-		err := ort.InitializeEnvironment()
-		if err != nil {
+		if err := ort.InitializeEnvironment(); err != nil {
 			log.Printf("Failed to initialize ONNX Runtime: %v", err)
 			return
 		}
@@ -26,8 +38,7 @@ func init() {
 		log.Println("ONNX Runtime initialized successfully")
 	} else {
 		// Try to initialize with default system library
-		err := ort.InitializeEnvironment()
-		if err != nil {
+		if err := ort.InitializeEnvironment(); err != nil {
 			log.Printf("ONNX Runtime not initialized. AI detection will be disabled.")
 			log.Printf("To enable AI detection, install ONNX Runtime and set 'ortlib_path' in config.toml")
 			return
@@ -35,27 +46,92 @@ func init() {
 		ortInitialized = true
 		log.Println("ONNX Runtime initialized with system library")
 	}
+
+	// 模型只加载一次，构建可复用的推理会话；失败则优雅降级，不影响主程序运行。
+	if err := initSession(); err != nil {
+		log.Printf("[AI-Local] Failed to load model, AI detection disabled: %v", err)
+	}
 }
 
-func Check(packet gopacket.Packet) bool {
-	if !ortInitialized {
-		return false
+// initSession 加载 ONNX 模型，并创建可复用的会话与输入/输出张量。
+// 会话在程序生命周期内长期持有，后续推理直接复用，无需重复加载模型。
+func initSession() error {
+	modelPath := viper.GetString("model_path")
+	if modelPath == "" {
+		return fmt.Errorf("model_path is not set")
+	}
+
+	// 输入张量 shape: (1, 1, 8, 8)，输出张量 shape: (1, 2)
+	inputTensor, err := ort.NewEmptyTensor[float32](ort.NewShape(1, 1, 8, 8))
+	if err != nil {
+		return fmt.Errorf("create input tensor: %w", err)
+	}
+	outputTensor, err := ort.NewEmptyTensor[float32](ort.NewShape(1, 2))
+	if err != nil {
+		inputTensor.Destroy()
+		return fmt.Errorf("create output tensor: %w", err)
+	}
+
+	session, err := ort.NewAdvancedSession(modelPath,
+		[]string{"input"}, []string{"output"},
+		[]ort.Value{inputTensor}, []ort.Value{outputTensor}, nil)
+	if err != nil {
+		inputTensor.Destroy()
+		outputTensor.Destroy()
+		return fmt.Errorf("create ONNX session: %w", err)
+	}
+
+	aiInputTensor = inputTensor
+	aiOutputTensor = outputTensor
+	aiSession = session
+	aiReady = true
+	log.Printf("[AI-Local] Model loaded and session ready: %s", modelPath)
+	return nil
+}
+
+// Check 对单个数据包做推理，返回“异常概率”[0,1] 以及模型是否可用（ok）。
+// 当模型未就绪或推理失败时返回 (0, false)，由调用方决定如何降级。
+func Check(packet gopacket.Packet) (float32, bool) {
+	if !ortInitialized || !aiReady {
+		return 0, false
 	}
 
 	image := PreprocessPacket(packet)
 
-	result, err := _check(image)
-	if err != nil {
-		log.Printf("Error during model inference: %v", err)
-		return false
+	// ONNX 会话非线程安全，且复用同一组张量，这里串行化访问。
+	aiMu.Lock()
+	defer aiMu.Unlock()
+
+	// 复用输入张量：直接写入其底层缓冲，避免每次分配新张量。
+	copy(aiInputTensor.GetData(), image)
+
+	if err := aiSession.Run(); err != nil {
+		// 单次推理失败时优雅降级，仅记录日志，绝不终止整个进程。
+		log.Printf("[AI-Local] Model inference failed: %v", err)
+		return 0, false
 	}
 
-	if result[0] > result[1] {
-		return false
-	} else {
-		return true
+	result := aiOutputTensor.GetData()
+	if len(result) < 2 {
+		log.Printf("[AI-Local] Unexpected model output length: %d", len(result))
+		return 0, false
 	}
 
+	// 标签方向：result[0]=异常、result[1]=正常（与原实现相反）。
+	// 依据是异常检测中异常应为少数类，而占多数（~91%）的应为正常。
+	// 注意：该方向尚未用带标签的数据集最终确认。
+	return softmax2(result[1], result[0]), true
+}
+
+// softmax2 计算二分类的第二类（异常）概率，做了数值稳定处理。
+func softmax2(normal, anomaly float32) float32 {
+	max := normal
+	if anomaly > max {
+		max = anomaly
+	}
+	e0 := math.Exp(float64(normal - max))
+	e1 := math.Exp(float64(anomaly - max))
+	return float32(e1 / (e0 + e1))
 }
 
 // packet转换为张量的函数
@@ -112,37 +188,4 @@ func AnonymizePacket(packet gopacket.Packet) []byte {
 	}
 
 	return newData
-}
-
-// check 函数：加载模型并进行推理
-func _check(inputData []float32) ([]float32, error) {
-	modelPath := viper.GetString("model_path")
-
-	// 创建输入张量，shape: (1, 1, 8, 8)
-	inputShape := ort.NewShape(1, 1, 8, 8)
-	inputTensor, err := ort.NewTensor(inputShape, inputData)
-	defer inputTensor.Destroy()
-
-	// 创建输出张量，shape: (1, 2)
-	outputShape := ort.NewShape(1, 2)
-	outputTensor, err := ort.NewEmptyTensor[float32](outputShape)
-	defer outputTensor.Destroy()
-
-	// 读取 ONNX 模型文件
-	session, err := ort.NewAdvancedSession(modelPath,
-		[]string{"input"}, []string{"output"}, []ort.Value{inputTensor}, []ort.Value{outputTensor}, nil)
-	if err != nil {
-		log.Fatalf("Error creating ONNX session: %v", err)
-	}
-	defer session.Destroy()
-
-	//运行
-	err = session.Run()
-	if err != nil {
-		log.Fatalf("Model inference failed: %v", err)
-	}
-
-	result := outputTensor.GetData()
-
-	return result, nil
 }

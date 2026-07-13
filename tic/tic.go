@@ -21,7 +21,18 @@ func create(m map[string]any) TIC {
 	case "local":
 		return &Local{}
 	case "ai-local":
-		return &AILocal{}
+		// 默认阈值 0.7，可被配置覆盖；兼容 toml 解析出的 float64/int/int64。
+		threshold := 0.7
+		switch t := m["threshold"].(type) {
+		case float64:
+			threshold = t
+		case int:
+			threshold = float64(t)
+		case int64:
+			threshold = float64(t)
+		}
+		log.Printf("[TIC] ai-local threshold set to %.2f\n", threshold)
+		return &AILocal{Threshold: threshold}
 	case "threatbook":
 		return &Threatbook{
 			APIKey: m["apikey"].(string),

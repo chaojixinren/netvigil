@@ -20,6 +20,8 @@ func create(m map[string]any) TIC {
 	switch m["type"] {
 	case "local":
 		return &Local{}
+	case "ai-local":
+		return &AILocal{}
 	case "threatbook":
 		return &Threatbook{
 			APIKey: m["apikey"].(string),

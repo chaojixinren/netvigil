@@ -22,6 +22,8 @@ func init() {
 	}
 	GeoLiteCity, err = geoip2.NewCityReaderFromFile("GeoLite2-City.mmdb")
 	if err != nil {
-		log.Panicln("Failed to open GeoLite2-City.mmdb:", err)
+		log.Println("Warning: Failed to open GeoLite2-City.mmdb:", err)
+		log.Println("Geo-location features will be disabled. Download from: https://dev.maxmind.com/geoip/geolite2-free-geolocation-data")
+		GeoLiteCity = nil // Continue without geo-location
 	}
 }

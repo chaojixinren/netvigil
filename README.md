@@ -44,7 +44,8 @@ apikey = 'your-api-key'
 
 Here is all TICs you can use:
 
-- `local`: Local Threat Intelligence Center
+- `local`: Local Threat Intelligence Center (IP blacklist database)
+- `ai-local`: **AI-based Anomaly Detection** using ONNX model (NEW!)
 - `netvigil`: NetVigil, usually used for local network
 - `threatbook`: [Threatbook](https://x.threatbook.cn/)
 - `virustotal`: [VirusTotal](https://www.virustotal.com/)

@@ -83,26 +83,28 @@ func capture(ps *gopacket.PacketSource) {
 		// }
 
 		// Get the location of the IP address
-		ipAddr := net.ParseIP(n.DstIP)
-		record, _ := GeoLiteCity.Lookup(ipAddr)
-		if record != nil {
-			n.Latitude = record.Location.Latitude
-			n.Longitude = record.Location.Longitude
+		if GeoLiteCity != nil {
+			ipAddr := net.ParseIP(n.DstIP)
+			record, _ := GeoLiteCity.Lookup(ipAddr)
+			if record != nil {
+				n.Latitude = record.Location.Latitude
+				n.Longitude = record.Location.Longitude
 
-			countryName := record.Country.Names["zh-CN"]
-			if countryName == "" {
-				countryName = record.Country.Names["en"]
-			}
-			cityName := record.City.Names["zh-CN"]
-			if cityName == "" {
-				cityName = record.City.Names["en"]
-			}
-			n.Location = countryName
-			if cityName != "" {
-				if n.Location != "" {
-					n.Location += " "
+				countryName := record.Country.Names["zh-CN"]
+				if countryName == "" {
+					countryName = record.Country.Names["en"]
 				}
-				n.Location += cityName
+				cityName := record.City.Names["zh-CN"]
+				if cityName == "" {
+					cityName = record.City.Names["en"]
+				}
+				n.Location = countryName
+				if cityName != "" {
+					if n.Location != "" {
+						n.Location += " "
+					}
+					n.Location += cityName
+				}
 			}
 		}
 

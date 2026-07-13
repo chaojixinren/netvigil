@@ -1,0 +1,47 @@
+# NetVigil Configuration File
+
+# The period of checking for threats
+check_period = '10s'
+
+# The url of the web interface
+# leave it empty if you don't want to use the web interface
+web = '127.0.0.1:8080'
+
+# Option to capture traffic, default is false
+capture = true
+
+# Login credentials for the web interface
+username = 'admin'
+password = 'password'
+
+# ONNX Runtime library path (optional)
+# Leave empty to use system default
+ortlib_path = ''
+
+# AI Model path (for local AI detection)
+model_path = 'model_64/modified_mobilenetv2_dst_64.onnx'
+
+# Threat Intelligence Centers (TIC)
+# Multiple TICs can be configured, they will be checked in order
+
+# Local threat intelligence database
+[[tic]]
+type = 'local'
+
+# Local AI-based anomaly detection (NEW!)
+[[tic]]
+type = 'ai-local'
+threshold = 0.7  # Detection threshold (0.0 - 1.0), higher = stricter
+
+# NetVigil server (for distributed deployment)
+[[tic]]
+type = 'netvigil'
+server = 'http://example.com:8080'
+apikey = 'your-api-key'
+
+# Threatbook API (commercial threat intelligence)
+[[tic]]
+type = 'threatbook'
+apikey = 'your-api-key'
+
+# You can add more TICs here

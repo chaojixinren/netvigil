@@ -9,6 +9,8 @@ import (
 	ort "github.com/yalue/onnxruntime_go"
 )
 
+var ortInitialized = false
+
 func init() {
 	libPath := viper.GetString("ortlib_path")
 
@@ -17,18 +19,35 @@ func init() {
 		ort.SetSharedLibraryPath(libPath)
 		err := ort.InitializeEnvironment()
 		if err != nil {
-			panic(err)
+			log.Printf("Failed to initialize ONNX Runtime: %v", err)
+			return
 		}
+		ortInitialized = true
+		log.Println("ONNX Runtime initialized successfully")
+	} else {
+		// Try to initialize with default system library
+		err := ort.InitializeEnvironment()
+		if err != nil {
+			log.Printf("ONNX Runtime not initialized. AI detection will be disabled.")
+			log.Printf("To enable AI detection, install ONNX Runtime and set 'ortlib_path' in config.toml")
+			return
+		}
+		ortInitialized = true
+		log.Println("ONNX Runtime initialized with system library")
 	}
 }
 
 func Check(packet gopacket.Packet) bool {
+	if !ortInitialized {
+		return false
+	}
 
 	image := PreprocessPacket(packet)
 
 	result, err := _check(image)
 	if err != nil {
-		log.Fatalf("Error during model inference: %v", err)
+		log.Printf("Error during model inference: %v", err)
+		return false
 	}
 
 	if result[0] > result[1] {
